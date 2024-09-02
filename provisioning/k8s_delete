@@ -1,0 +1,23 @@
+#!/bin/bash -ef
+
+virtualMachines=(
+    "k8s-master-01"
+    "k8s-master-02"
+    "k8s-master-03"
+
+    "k8s-worker-01"
+    "k8s-worker-02"
+    "k8s-worker-03"
+    "k8s-worker-04"
+    "k8s-worker-05"
+)
+
+function undeploy() {
+    for virtualMachine in ${virtualMachines[@]}; do
+        virsh destroy --domain $virtualMachine || true
+        virsh undefine $virtualMachine --delete-snapshots --remove-all-storage || true
+        rm $virtualMachine.xml $virtualMachine.qcow2
+    done
+}
+
+undeploy

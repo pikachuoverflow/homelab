@@ -1,0 +1,105 @@
+#!/bin/bash -ef
+
+imageName="qcow/noble-server-cloudimg-amd64.img"
+
+declare -A virtualMachines=(
+    # man virt-install: For Xen virtual machines it is required that 
+    # the first 3 pairs in the MAC address be the sequence '00:16:3e', 
+    # while for QEMU or KVM virtual machines it must be '52:54:00'.
+
+    ["k8s-master-01"]="52:54:00:05:01:11" # 192.168.50.111
+    ["k8s-master-02"]="52:54:00:05:01:12" # 192.168.50.112
+    ["k8s-master-03"]="52:54:00:05:01:13" # 192.168.50.113
+
+    ["k8s-worker-01"]="52:54:00:05:01:21" # 192.168.50.121
+    ["k8s-worker-02"]="52:54:00:05:01:22" # 192.168.50.122
+    ["k8s-worker-03"]="52:54:00:05:01:23" # 192.168.50.123
+    ["k8s-worker-04"]="52:54:00:05:01:24" # 192.168.50.124
+    ["k8s-worker-05"]="52:54:00:05:01:25" # 192.168.50.125
+)
+
+function checkProgramExists() {
+    for program in "$@"; do 
+        if ! command -v $program &> /dev/null; then
+            echo "$program could not be found"
+            exit 1
+        fi
+    done
+}
+
+function checkFileExists() {
+    for file in "$@"; do 
+        if ! test -f $file; then
+            echo "$file could not be found"
+            exit 1
+        fi
+    done
+}
+
+function deploy() {
+    for virtualMachine in ${!virtualMachines[@]}; do
+        macAddr=${virtualMachines[$virtualMachine]}
+        echo $virtualMachine $macAddr
+
+        if [ -f $virtualMachine.xml ]; then
+            echo "VM $virtualMachine exists, skipping"
+            continue
+        fi
+
+        cat > "user-data-$virtualMachine.yaml" << EOF
+#cloud-config
+
+preserve_hostname: false
+fqdn: $virtualMachine
+
+users:
+  - name: pikachu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: wheel
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHCJXc/MvGBHxpJ12mB1Hy7M6trfWoqPsw1zbGHkN6f0
+
+packages:
+  - wget
+  - curl
+  - bash-completion
+  - cloud-initramfs-growroot
+  - tcpdump
+  - htop
+
+growpart:
+  mode: auto
+  devices: ['/']
+  ignore_growroot_disabled: false  
+      
+EOF
+        cp $imageName $virtualMachine.qcow2
+        qemu-img resize $virtualMachine.qcow2 200G
+
+        virt-install \
+            --name $virtualMachine \
+            --memory 8192 \
+            --vcpus 4 \
+            --os-variant ubuntu22.04 \
+            --disk $virtualMachine.qcow2 \
+            --network bridge=br0,model=virtio,mac=$macAddr \
+            --nographics \
+            --noautoconsole \
+            --accelerate \
+            --check-cpu \
+            --cloud-init user-data=user-data-$virtualMachine.yaml
+
+        virsh autostart $virtualMachine 
+        virsh dumpxml $virtualMachine > $virtualMachine.xml
+        rm user-data-$virtualMachine.yaml
+    done
+
+    virsh list --all
+}
+
+## prerequisites
+checkProgramExists virt-install virsh
+checkFileExists $imageName
+
+deploy
